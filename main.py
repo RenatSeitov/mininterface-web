@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from mininterface import run
 
-from jupiterInterface import JupyterWidgetInterface
+from marimointerface import MarimoInterface
 
 @dataclass
 class NestedEnv:
@@ -16,7 +16,7 @@ class Env:
     my_flag: bool = False
     my_validated: str = "hello"
 
-with run(Env, interface=JupyterWidgetInterface, title="Demo") as m:
+with run(Env, interface=MarimoInterface, title="Demo") as m:
     print("Initial:", m.env)
     m.form()
     print("After form call (still old in this line):", m.env)
