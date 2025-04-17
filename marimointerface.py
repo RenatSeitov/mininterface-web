@@ -14,6 +14,35 @@ class MarimoInterface(Mininterface):
         self._widgets = {}
         self._default_values = {}
 
+    def save_form(self):
+        # Логика сохранения формы
+        print("Форма сохранена")
+        self.apply_form()
+
+    def reset_form(self):
+        # Логика сброса формы
+        print("Форма сброшена")
+        for key, widget in self._widgets.items():
+            if key not in ["save_button", "reset_button", "clear_button"]:
+                if isinstance(widget, mo.ui.checkbox):
+                    widget.value = False
+                elif isinstance(widget, mo.ui.number):
+                    widget.value = 0
+                else:
+                    widget.value = ""
+
+    def clear_form(self):
+        # Логика очистки формы
+        print("Форма очищена")
+        for key, widget in self._widgets.items():
+            if key not in ["save_button", "reset_button", "clear_button"]:
+                if isinstance(widget, mo.ui.checkbox):
+                    widget.value = False
+                elif isinstance(widget, mo.ui.number):
+                    widget.value = 0
+                else:
+                    widget.value = ""
+
     def form(self, form=None, title="", *, submit=True):
         if form is None:
             data_instance = self.env
@@ -33,43 +62,58 @@ class MarimoInterface(Mininterface):
         self._default_values = fields_to_edit.copy()
         self._widgets = {}
 
-        ui_elements = []
-        if title:
-            # Просто текстовый заголовок — можно использовать mo.md()
-            ui_elements.append(mo.ui.anyWidget(mo.md(f"### {title}")))
+        ui_tree = {}
 
         for key, value in fields_to_edit.items():
             if isinstance(value, bool):
-                widget = mo.ui.checkbox(label=key, value=value)
-            elif isinstance(value, int):
-                widget = mo.ui.number(label=key, value=value)
+                self._widgets[key] = mo.ui.checkbox(label=key, value=value)
+                ui_tree[key] = self._widgets[key]
+            elif isinstance(value, int) or (value is None and key.endswith('_number')):
+                self._widgets[key] = mo.ui.number(label=key, value=value if value is not None else 0)
+                ui_tree[key] = self._widgets[key]
+            elif isinstance(value, str):
+                self._widgets[key] = mo.ui.text(label=key, value=value)
+                ui_tree[key] = self._widgets[key]
+            elif isinstance(value, float):
+                self._widgets[key] = mo.ui.number(label=key, value=value, step=0.1)
+                ui_tree[key] = self._widgets[key]
             else:
-                widget = mo.ui.text(label=key, value=str(value))
-            self._widgets[key] = widget
-            ui_elements.append(mo.ui.anyWidget(widget))
+                self._widgets[key] = mo.ui.text(label=key, value=str(value))
+                ui_tree[key] = self._widgets[key]
 
-        # Возвращаем список anyWidget-обёрнутых элементов
-        return ui_elements
+        self._save_button = mo.ui.button(label="Сохранить", on_click=lambda _: self.save_form())
+        ui_tree["save_button"] = self._save_button
 
+        self._reset_button = mo.ui.button(label="Сбросить", on_click=lambda _: self.reset_form())
+        ui_tree["reset_button"] = self._reset_button
+
+        self._clear_button = mo.ui.button(label="Очистить", on_click=lambda _: self.clear_form())
+        ui_tree["clear_button"] = self._clear_button
+
+        return mo.tree(ui_tree)
 
     def apply_form(self, data_instance=None):
         if data_instance is None:
             data_instance = self.env
 
         for key, widget in self._widgets.items():
-            val = widget.value
-            if isinstance(widget, mo.ui.checkbox):
-                val = bool(val)
-            elif isinstance(widget, mo.ui.number):
-                val = int(val)
-            else:
-                val = str(val)
+            if key not in ["save_button", "reset_button", "clear_button"]:
+                val = widget.value
+                if isinstance(widget, mo.ui.checkbox):
+                    val = bool(val)
+                elif isinstance(widget, mo.ui.number):
+                    if isinstance(val, int):
+                        val = int(val)
+                    else:
+                        val = float(val)
+                else:
+                    val = str(val)
 
-            if isinstance(data_instance, dict):
-                data_instance[key] = val
-            elif is_dataclass(data_instance):
-                setattr(data_instance, key, val)
-            elif isinstance(data_instance, SimpleNamespace):
-                setattr(data_instance, key, val)
+                if isinstance(data_instance, dict):
+                    data_instance[key] = val
+                elif is_dataclass(data_instance):
+                    setattr(data_instance, key, val)
+                elif isinstance(data_instance, SimpleNamespace):
+                    setattr(data_instance, key, val)
 
         return data_instance
