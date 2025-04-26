@@ -8,7 +8,7 @@ app = marimo.App(width="medium")
 def _():
     import marimo as mo
     from dataclasses import fields, is_dataclass
-    from typing import Any, Dict, Optional, Union, List, Type
+    from typing import Any, Dict, Optional
     import anywidget
     import traitlets
 
@@ -91,6 +91,7 @@ def _():
             }
         }
         """
+
     class MarimoInterface:
         def __init__(self, data_instance: Any):
             self.data = data_instance
@@ -103,6 +104,7 @@ def _():
                 float: NumberWidget,
                 str: TextWidget
             }
+            self._container = None
 
         def _get_widget_class(self, value: Any) -> type:
             value_type = type(value)
@@ -132,8 +134,10 @@ def _():
                 self._input_widgets[full_key] = widget
                 self._default_values[full_key] = value
 
+                # Отображаем тип значения рядом с названием поля
+                type_name = type(value).__name__
                 return mo.hstack([
-                    mo.md(f"**{type(value).__name__}**"),
+                    mo.md(f"**{type_name}**"),
                     mo.ui.anywidget(widget)
                 ], gap=0.5, align="center")
 
@@ -155,10 +159,10 @@ def _():
                 elif isinstance(current, dict):
                     current[final_key] = value
 
+            # Можно вернуть обновленное дерево или просто None
             return mo.tree(self._widgets)
 
         def reset_form(self, *args):
-            # Полностью пересоздаем форму
             self._widgets = {}
             self._input_widgets = {}
 
@@ -170,7 +174,8 @@ def _():
                 for key, value in self.data.items():
                     self._widgets[key] = self._create_widget_for_field(key, value)
 
-            self._widgets["_buttons"] = mo.hstack([
+            # Панель кнопок отдельно
+            buttons_panel = mo.hstack([
                 mo.ui.button(
                     label="Сохранить",
                     on_click=lambda _: self.save_form()
@@ -181,11 +186,45 @@ def _():
                 )
             ], gap=1)
 
-            return mo.tree(self._widgets)
+            # Вертикальный стек: кнопки сверху, форма снизу
+            return mo.vstack([
+                buttons_panel,
+                mo.tree(self._widgets)
+            ], gap=1)
 
+    
         def form(self):
-            return self.reset_form()  # Используем reset_form для первоначального создания формы
+            self._widgets = {}
+            self._input_widgets = {}
 
+            if is_dataclass(self.data):
+                for field in fields(self.data):
+                    field_value = getattr(self.data, field.name)
+                    self._widgets[field.name] = self._create_widget_for_field(field.name, field_value)
+            elif isinstance(self.data, dict):
+                for key, value in self.data.items():
+                    self._widgets[key] = self._create_widget_for_field(key, value)
+
+            # Панель кнопок отдельно
+            buttons_panel = mo.hstack([
+                mo.ui.button(
+                    label="Сохранить",
+                    on_click=lambda _: self.save_form()
+                ),
+                mo.ui.button(
+                    label="Сбросить",
+                    on_click=lambda _: self.reset_form()
+                )
+            ], gap=1)
+
+            # Вертикальный стек: кнопки сверху, форма снизу
+            return mo.vstack([
+                buttons_panel,
+                mo.tree(self._widgets)
+            ], gap=1)  # Создаем форму при первом вызове
+
+
+    # Пример dataclass-ов и создание интерфейса
 
     from dataclasses import dataclass, field
 
@@ -195,13 +234,11 @@ def _():
         level: int = 1
         duration: float = 3600.0
 
-
     @dataclass
     class Relaxation:
         """Parameters for relaxation."""
         one: int = 1
         two: float = 3600.0
-
 
     @dataclass
     class PHMLoadingAnalyser:
@@ -224,8 +261,8 @@ def _():
         anal_param_pressure: int = 4
         increase_limit: float = 1.1
         agg_window_size: int = 3
-        relaxation_params: Dict[str, RelaxationParams] = field(default_factory=dict)
-        relaxation: Dict[str, RelaxationParams] = field(default_factory=dict)
+        relaxation_params: RelaxationParams = field(default_factory=RelaxationParams)
+        relaxation: Relaxation = field(default_factory=Relaxation)
 
     # Создаем экземпляр с вложенными параметрами
     config = PHMLoadingAnalyser(
@@ -241,7 +278,6 @@ def _():
         BaseWidget,
         CheckboxWidget,
         Dict,
-        List,
         MarimoInterface,
         NumberWidget,
         Optional,
@@ -249,8 +285,6 @@ def _():
         Relaxation,
         RelaxationParams,
         TextWidget,
-        Type,
-        Union,
         anywidget,
         config,
         dataclass,

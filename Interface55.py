@@ -8,15 +8,21 @@ app = marimo.App(width="medium")
 def _():
     import marimo as mo
     from dataclasses import fields, is_dataclass
-    from typing import Any, Dict, Optional, Union, List, Type
+    from typing import Any, Dict, Optional
     import anywidget
     import traitlets
+    import copy
 
     class BaseWidget(anywidget.AnyWidget):
         value = traitlets.Any().tag(sync=True)
 
         def __init__(self, value: Any, **kwargs):
             super().__init__(value=value, **kwargs)
+
+        def update_value(self, new_value: Any):
+            """Обновляет значение виджета и синхронизирует с фронтендом"""
+            self.value = new_value
+            self.send_state({"value": new_value})
 
     class TextWidget(BaseWidget):
         _esm = """
@@ -91,18 +97,37 @@ def _():
             }
         }
         """
+
     class MarimoInterface:
         def __init__(self, data_instance: Any):
             self.data = data_instance
+            self._initial_data = self._deep_copy(data_instance)
+            self.default_data = self._deep_copy(self.data)
             self._widgets = {}
             self._input_widgets = {}
-            self._default_values = {}
             self._widget_types = {
                 bool: CheckboxWidget,
                 int: NumberWidget,
                 float: NumberWidget,
                 str: TextWidget
             }
+            self._form_state = None  # Для хранения состояния формы
+            self._save_button = None
+            self._reset_button = None
+            self._reset_all_button = None
+
+        def _deep_copy(self, obj):
+            """Создает глубокую копию объекта, включая dataclass"""
+            if is_dataclass(obj):
+                result = {}
+                for field in fields(obj):
+                    value = getattr(obj, field.name)
+                    result[field.name] = self._deep_copy(value)
+                return type(obj)(**result)
+            elif isinstance(obj, dict):
+                return {k: self._deep_copy(v) for k, v in obj.items()}
+            else:
+                return copy.deepcopy(obj)
 
         def _get_widget_class(self, value: Any) -> type:
             value_type = type(value)
@@ -130,10 +155,10 @@ def _():
                 widget_class = self._get_widget_class(value)
                 widget = widget_class(value=value)
                 self._input_widgets[full_key] = widget
-                self._default_values[full_key] = value
 
+                type_name = type(value).__name__
                 return mo.hstack([
-                    mo.md(f"**{type(value).__name__}**"),
+                    mo.md(f"**{type_name}**"),
                     mo.ui.anywidget(widget)
                 ], gap=0.5, align="center")
 
@@ -155,10 +180,68 @@ def _():
                 elif isinstance(current, dict):
                     current[final_key] = value
 
-            return mo.tree(self._widgets)
+            # Обновляем начальное состояние после сохранения
+            self._initial_data = self._deep_copy(self.data)
+            return self.form()
 
         def reset_form(self, *args):
-            # Полностью пересоздаем форму
+            # Восстанавливаем данные из исходного состояния
+            self._restore_data(self._initial_data, self.data)
+            # Обновляем значения всех виджетов
+            for key, widget in self._input_widgets.items():
+                value = self._get_value_from_data(key)
+                widget.update_value(value)  # Используем метод update_value
+
+            return self.form()
+
+        def reset_all_form(self, *args):
+            """Сбрасывает к первоначальному состоянию (до любых изменений)"""
+            self._saved_data = self._deep_copy(self.default_data)  
+            self._restore_data(self._initial_data, self.default_data)
+
+            for key, widget in self._input_widgets.items():
+                value = self._get_value_from_data(key)
+                widget.update_value(value)
+            return self.form()
+
+        def _restore_data(self, src, dest):
+            """Рекурсивно восстанавливает данные из src в dest"""
+            if is_dataclass(src) and is_dataclass(dest):
+                for field in fields(src):
+                    src_value = getattr(src, field.name)
+                    dest_value = getattr(dest, field.name)
+                    if is_dataclass(src_value) and is_dataclass(dest_value):
+                        self._restore_data(src_value, dest_value)
+                    elif isinstance(src_value, dict) and isinstance(dest_value, dict):
+                        self._restore_data(src_value, dest_value)
+                    else:
+                        setattr(dest, field.name, src_value)
+            elif isinstance(src, dict) and isinstance(dest, dict):
+                for key in src:
+                    if key in dest:
+                        src_value = src[key]
+                        dest_value = dest[key]
+                        if is_dataclass(src_value) and is_dataclass(dest_value):
+                            self._restore_data(src_value, dest_value)
+                        elif isinstance(src_value, dict) and isinstance(dest_value, dict):
+                            self._restore_data(src_value, dest_value)
+                        else:
+                            dest[key] = src_value
+
+        def _get_value_from_data(self, key: str) -> Any:
+            """Получает значение из данных по ключу с точками"""
+            keys = key.split('.')
+            current = self.data
+
+            for k in keys:
+                if is_dataclass(current):
+                    current = getattr(current, k)
+                elif isinstance(current, dict):
+                    current = current[k]
+
+            return current
+
+        def form(self):
             self._widgets = {}
             self._input_widgets = {}
 
@@ -169,23 +252,41 @@ def _():
             elif isinstance(self.data, dict):
                 for key, value in self.data.items():
                     self._widgets[key] = self._create_widget_for_field(key, value)
+        
 
-            self._widgets["_buttons"] = mo.hstack([
-                mo.ui.button(
+       
+
+            self._save_button = mo.ui.button(
                     label="Сохранить",
-                    on_click=lambda _: self.save_form()
-                ),
-                mo.ui.button(
-                    label="Сбросить",
-                    on_click=lambda _: self.reset_form()
+                    on_click=lambda _: self.save_form(),
+                    kind="success"
                 )
+            self._reset_button = mo.ui.button(
+                    label="Сбросить",
+                    on_click=lambda _: self.reset_form(),
+                    kind="danger"
+                )
+
+            self._reset_all_button = mo.ui.button(
+                    label="Сбросить по умолчанию",
+                    on_click=lambda _: self.reset_all_form(),
+                    kind="danger"
+                )
+            
+            buttons_panel = mo.hstack([
+                self._save_button,
+                self._reset_button,
+                self._reset_all_button
+
             ], gap=1)
 
-            return mo.tree(self._widgets)
+        
 
-        def form(self):
-            return self.reset_form()  # Используем reset_form для первоначального создания формы
 
+            return mo.vstack([
+                buttons_panel,
+                mo.tree(self._widgets)
+            ], gap=1)
 
     from dataclasses import dataclass, field
 
@@ -195,13 +296,11 @@ def _():
         level: int = 1
         duration: float = 3600.0
 
-
     @dataclass
     class Relaxation:
         """Parameters for relaxation."""
         one: int = 1
         two: float = 3600.0
-
 
     @dataclass
     class PHMLoadingAnalyser:
@@ -224,8 +323,8 @@ def _():
         anal_param_pressure: int = 4
         increase_limit: float = 1.1
         agg_window_size: int = 3
-        relaxation_params: Dict[str, RelaxationParams] = field(default_factory=dict)
-        relaxation: Dict[str, RelaxationParams] = field(default_factory=dict)
+        relaxation_params: RelaxationParams = field(default_factory=RelaxationParams)
+        relaxation: Relaxation = field(default_factory=Relaxation)
 
     # Создаем экземпляр с вложенными параметрами
     config = PHMLoadingAnalyser(
@@ -241,7 +340,6 @@ def _():
         BaseWidget,
         CheckboxWidget,
         Dict,
-        List,
         MarimoInterface,
         NumberWidget,
         Optional,
@@ -249,10 +347,9 @@ def _():
         Relaxation,
         RelaxationParams,
         TextWidget,
-        Type,
-        Union,
         anywidget,
         config,
+        copy,
         dataclass,
         field,
         fields,
